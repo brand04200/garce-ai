@@ -317,6 +317,10 @@ async def on_message(message: discord.Message) -> None:
     if message.author.bot:
         return
 
+    # Jangan merespons pesan broadcast seperti @everyone/@here.
+    if message.mention_everyone:
+        return
+
     me = client.user
     if me is None:
         return
