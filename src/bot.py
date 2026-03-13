@@ -386,19 +386,53 @@ def _http_get_text(url: str) -> str:
         return response.read().decode("utf-8", errors="replace")
 
 
+_WEATHER_NOISE_WORDS = [
+    "hari ini", "sekarang", "saat ini", "terkini", "terbaru",
+    "besok", "esok", "today", "now", "currently",
+    "bagaimana", "gimana", "dong", "deh",
+]
+_LOCATION_PREPOSITIONS = [" di ", " untuk ", " kota ", " daerah ", " wilayah "]
+
+
+def _clean_extracted_location(raw: str) -> str:
+    result = raw.strip(" ?!.,")
+    # Jika ada preposisi lokal di dalam teks, ambil bagian setelahnya.
+    lowered = result.lower()
+    for prep in _LOCATION_PREPOSITIONS:
+        idx = lowered.find(prep)
+        if idx != -1:
+            result = result[idx + len(prep):].strip(" ?!.,")
+            lowered = result.lower()
+            break
+    # Buang kata keterangan waktu dari depan maupun belakang secara iteratif.
+    changed = True
+    while changed:
+        changed = False
+        for noise in _WEATHER_NOISE_WORDS:
+            lowered = result.lower()
+            if lowered.startswith(noise):
+                result = result[len(noise):].strip(" ?!.,")
+                changed = True
+            elif lowered.endswith(noise):
+                result = result[: len(result) - len(noise)].strip(" ?!.,")
+                changed = True
+    return result
+
+
 def _extract_location_from_weather_prompt(prompt: str) -> tuple[str, bool]:
     cleaned = re.sub(r"\s+", " ", (prompt or "").strip())
     lowered = cleaned.lower()
     patterns = [
         r"(?:cuaca|weather|suhu|prakiraan cuaca)\s+(?:di|untuk|kota|daerah)\s+(.+)$",
         r"(?:bagaimana|gimana)\s+cuaca\s+(?:di|untuk)\s+(.+)$",
-        r"(?:cuaca|weather)\s+(.+)$",
+        r"(?:cuaca|weather|suhu)\s+(.+)$",
     ]
     for pattern in patterns:
         match = re.search(pattern, lowered, re.IGNORECASE)
         if not match:
             continue
-        location = cleaned[match.start(1):match.end(1)].strip(" ?!.,")
+        raw = cleaned[match.start(1):match.end(1)]
+        location = _clean_extracted_location(raw)
         if location:
             return location, False
     return WEATHER_DEFAULT_LOCATION, True
@@ -1121,7 +1155,7 @@ async def on_message(message: discord.Message) -> None:
 
     if prompt and is_weather_question(prompt):
         weather_result = await get_weather_reply(prompt)
-        if weather_result.is_private_warning or weather_result.is_error:
+        if weather_result.is_private_warning:
             await _send_private_warning(message.author, weather_result.text)
             return
         await _reply_and_store(message, conversation_key, prompt, weather_result.text)
