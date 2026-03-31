@@ -787,16 +787,62 @@ async def _handle_channel_dispatch_command(
         )
         return True
 
+    # Cek apakah user ingin forward gambar
+    forward_image = False
+    # Deteksi kata kunci forward gambar
+    lower_prompt = (prompt or "").lower()
+    if any(k in lower_prompt for k in ["kirim gambar", "forward gambar", "kirim file", "kirim attachment", "forward image", "kirim foto"]):
+        forward_image = True
+
+    # Jika user reply ke pesan yang ada gambarnya, ambil attachment dari situ
+    target_attachments = []
+    if forward_image:
+        # Cek attachment di pesan user
+        if message.attachments:
+            target_attachments = message.attachments
+        # Atau attachment di pesan yang di-reply
+        elif message.reference and hasattr(message.reference, "resolved") and isinstance(message.reference.resolved, discord.Message):
+            ref_msg = message.reference.resolved
+            if ref_msg.attachments:
+                target_attachments = ref_msg.attachments
+        # Atau fetch manual jika belum resolve
+        elif message.reference and message.reference.message_id and message.channel:
+            try:
+                fetched = await message.channel.fetch_message(message.reference.message_id)
+                if fetched and fetched.attachments:
+                    target_attachments = fetched.attachments
+            except Exception:
+                pass
+
     try:
-        await command.channel.send(
-            command.content,
-            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
-        )
+        files = []
+        if forward_image and target_attachments:
+            import io
+            import discord
+            for att in target_attachments:
+                # Download file ke memory
+                data = await att.read()
+                fileobj = io.BytesIO(data)
+                fileobj.seek(0)
+                files.append(discord.File(fileobj, filename=att.filename))
+            await command.channel.send(
+                command.content or "[forwarded image]",
+                files=files,
+                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+            )
+        else:
+            await command.channel.send(
+                command.content,
+                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+            )
     except discord.HTTPException:
         await message.reply("Gagal mengirim pesan ke channel tujuan. Coba lagi sebentar ya.")
         return True
 
-    confirmation = f"Siap, pesannya sudah saya kirim ke {command.channel.mention}."
+    if forward_image and target_attachments:
+        confirmation = f"Siap, gambar{' dan pesan' if command.content else ''} sudah saya kirim ke {command.channel.mention}."
+    else:
+        confirmation = f"Siap, pesannya sudah saya kirim ke {command.channel.mention}."
     await message.reply(confirmation)
     await _store_conversation_turn(conversation_key, prompt, confirmation)
     return True
